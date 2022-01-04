@@ -4,5 +4,14 @@
 #include <libavformat/avio.h>
 
 
+typedef struct buffer_data {
+  uint8_t *ptr;
+  size_t size;
+} buffer_data;
+typedef struct o_buffer_data {
+    size_t size;
+    uint8_t *ptr;
+    size_t capacity;
+} o_buffer_data;
 
-uint8_t *concat(uint8_t *buffer[], size_t size[], const int count);
+o_buffer_data *concat(uint8_t *buffer[], size_t size[], const int count);
