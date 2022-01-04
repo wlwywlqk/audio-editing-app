@@ -7,12 +7,12 @@ static int read_packet(void *opaque, uint8_t *buf, int buf_size) {
   struct buffer_data *bd = (struct buffer_data *)opaque;
   buf_size = FFMIN(buf_size, bd->size);
 
-  if (!buf_size) return AVERROR_EOF;
+  if (!buf_size)
+    return AVERROR_EOF;
 
   memcpy(buf, bd->ptr, buf_size);
   bd->ptr += buf_size;
   bd->size -= buf_size;
-printf("r  %d\n", buf_size);
 
   return buf_size;
 }
@@ -21,7 +21,8 @@ static int write_packet(void *opaque, uint8_t *buf, int buf_size) {
   o_buffer_data *bd = (struct o_buffer_data *)opaque;
   size_t size = bd->size + buf_size;
 
-  if (!buf_size) return AVERROR_EOF;
+  if (!buf_size)
+    return AVERROR_EOF;
 
   if (bd->capacity < size) {
     bd->ptr = av_realloc(bd->ptr, size * 2);
@@ -33,20 +34,70 @@ static int write_packet(void *opaque, uint8_t *buf, int buf_size) {
   }
 
   memcpy(bd->ptr + bd->size, buf, buf_size);
-printf("w  %d\n", buf_size);
   bd->size = size;
   return buf_size;
 }
 
+int dump_buffer(uint8_t *buffer, size_t size) {
+  int ret = 0;
+  AVFormatContext *fmt_ctx = NULL;
+  AVIOContext *io_ctx = NULL;
+  AVPacket pkt;
+  uint8_t *avio_ctx_buffer = NULL;
+  size_t avio_ctx_buffer_size = 4096;
+  buffer_data bd = {0};
+  bd.ptr = buffer;
+  bd.size = size;
+
+  avio_ctx_buffer = av_malloc(avio_ctx_buffer_size);
+  if (!avio_ctx_buffer) {
+    ret = AVERROR(ENOMEM);
+    goto end;
+  }
+
+  if (!(fmt_ctx = avformat_alloc_context())) {
+    ret = AVERROR(ENOMEM);
+    goto end;
+  }
+
+  if (!(io_ctx = avio_alloc_context(avio_ctx_buffer, avio_ctx_buffer_size, 0,
+                                    &bd, &read_packet, NULL, NULL))) {
+    ret = AVERROR(ENOMEM);
+    goto end;
+  }
+  fmt_ctx->pb = io_ctx;
+  ret = avformat_open_input(&fmt_ctx, NULL, NULL, NULL);
+  if (ret < 0) {
+    printf("Could not open input\n");
+    goto end;
+  }
+
+  ret = avformat_find_stream_info(fmt_ctx, NULL);
+  if (ret < 0) {
+    printf("Could not find stream information\n");
+    goto end;
+  }
+
+  av_dump_format(fmt_ctx, 0, NULL, 0);
+
+end:
+  avformat_close_input(&fmt_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Error occurred: %s\n", av_err2str(ret));
+    return ret;
+  }
+
+  return 0;
+}
+
 o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
                       const int count) {
-  int i, ret = 0;
+  int i, j, ret = 0;
   AVFormatContext *fmt_ctx = NULL;
   AVIOContext *io_ctx = NULL, *o_io_ctx = NULL;
   AVPacket pkt;
-  uint8_t *avio_ctx_buffer = NULL, *o_avio_ctx_buffer = NULL;
-  size_t avio_ctx_buffer_size = 4096, o_size = 0;
-  buffer_data bd = {0};
+  uint8_t *o_avio_ctx_buffer = NULL;
+  size_t avio_ctx_buffer_size = 4096;
   o_buffer_data *o_bd = NULL;
 
   o_bd = av_malloc(sizeof(o_buffer_data));
@@ -63,8 +114,10 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
     goto end;
   }
 
-  avio_ctx_buffer = av_malloc(avio_ctx_buffer_size);
-  if (!avio_ctx_buffer) {
+  buffer_data *bd_array = NULL;
+
+  bd_array = av_malloc_array(count, sizeof(buffer_data));
+  if (!bd_array) {
     ret = AVERROR(ENOMEM);
     goto end;
   }
@@ -104,8 +157,16 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
   }
 
   for (i = 0; i < count; i++) {
-    bd.ptr = buffer_list[i];
-    bd.size = size_list[i];
+    uint8_t *avio_ctx_buffer = NULL;
+
+    bd_array[i].ptr = buffer_list[i];
+    bd_array[i].size = size_list[i];
+
+    avio_ctx_buffer = av_malloc(avio_ctx_buffer_size);
+    if (!avio_ctx_buffer) {
+      ret = AVERROR(ENOMEM);
+      goto end;
+    }
 
     if (!(fmt_ctx = avformat_alloc_context())) {
       ret = AVERROR(ENOMEM);
@@ -113,8 +174,9 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
     }
     fmt_ctx_array[i] = fmt_ctx;
 
-    if (!(io_ctx = avio_alloc_context(avio_ctx_buffer, avio_ctx_buffer_size, 0,
-                                      &bd, &read_packet, NULL, NULL))) {
+    if (!(io_ctx =
+              avio_alloc_context(avio_ctx_buffer, avio_ctx_buffer_size, 0,
+                                 &bd_array[i], &read_packet, NULL, NULL))) {
       ret = AVERROR(ENOMEM);
       goto end;
     }
@@ -132,19 +194,23 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
     }
     av_dump_format(fmt_ctx, 0, NULL, 0);
 
-    AVStream *o_stream = avformat_new_stream(o_fmt_ctx, NULL);
-    if (!o_stream) {
-      printf("Could not new output stream\n");
-      goto end;
-    }
-    ret = avcodec_parameters_copy(o_stream->codecpar,
-                                  fmt_ctx->streams[i]->codecpar);
+    if (i == 0) {
+      for (j = 0; j < fmt_ctx->nb_streams; j++) {
+        AVStream *o_stream = avformat_new_stream(o_fmt_ctx, NULL);
+        if (!o_stream) {
+          printf("Could not new output stream\n");
+          goto end;
+        }
+        ret = avcodec_parameters_copy(o_stream->codecpar,
+                                      fmt_ctx->streams[j]->codecpar);
 
-    if (ret < 0) {
-      printf("Could not copy codec parameters\n");
-      goto end;
+        if (ret < 0) {
+          printf("Could not copy codec parameters\n");
+          goto end;
+        }
+        o_stream->codecpar->codec_tag = 0;
+      }
     }
-    o_stream->codecpar->codec_tag = 0;
   }
 
   ret = avformat_write_header(o_fmt_ctx, NULL);
@@ -165,6 +231,10 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
       }
       i_stream = fmt_ctx->streams[pkt.stream_index];
       o_stream = o_fmt_ctx->streams[pkt.stream_index];
+      if (!o_stream) {
+        av_packet_unref(&pkt);
+        continue;
+      }
 
       pkt.pts =
           av_rescale_q_rnd(pkt.pts, i_stream->time_base, o_stream->time_base,
@@ -190,32 +260,33 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
 
   ret = av_write_trailer(o_fmt_ctx);
 
-
   if (ret < 0) {
     printf("Could not write trailer for output file\n");
     goto end;
   }
 
-  // av_dump_format(o_fmt_ctx, 0, NULL, 0);
+  av_dump_format(o_fmt_ctx, 0, NULL, 1);
 
 end:
+  if (o_avio_ctx_buffer) {
+    av_freep(&o_avio_ctx_buffer);
+  }
 
-    if (o_avio_ctx_buffer) {
-      av_freep(&o_avio_ctx_buffer);
-    }
+  if (o_io_ctx) {
+    avio_context_free(&o_io_ctx);
+  }
 
-    if (o_io_ctx) {
-      avio_context_free(&o_io_ctx);
-    }
+  if (o_fmt_ctx) {
+    avformat_free_context(o_fmt_ctx);
+  }
 
-    if (o_fmt_ctx) {
-        avformat_free_context(o_fmt_ctx);
-    }
-     
-    if (fmt_ctx_array) {
-        av_freep(&fmt_ctx_array);
-    }
- 
+  if (fmt_ctx_array) {
+    av_freep(&fmt_ctx_array);
+  }
+  if (bd_array) {
+    av_freep(&bd_array);
+  }
+
   if (ret < 0) {
     fprintf(stderr, "Error occurred: %s\n", av_err2str(ret));
     return NULL;

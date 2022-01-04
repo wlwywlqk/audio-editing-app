@@ -13,5 +13,5 @@ typedef struct o_buffer_data {
     uint8_t *ptr;
     size_t capacity;
 } o_buffer_data;
-
+int dump_buffer(uint8_t *buffer, size_t size);
 o_buffer_data *concat(uint8_t *buffer[], size_t size[], const int count);
