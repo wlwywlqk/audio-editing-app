@@ -93,6 +93,7 @@ end:
 o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
                       const int count) {
   int i, j, ret = 0;
+  int64_t pts_offset = 0, dts_offset = 0;
   AVFormatContext *fmt_ctx = NULL;
   AVIOContext *io_ctx = NULL, *o_io_ctx = NULL;
   AVPacket pkt;
@@ -221,6 +222,8 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
 
   for (i = 0; i < count; i++) {
     fmt_ctx = fmt_ctx_array[i];
+    int64_t pts = 0, dts = 0, duration = 0;
+
 
     while (1) {
       AVStream *i_stream, *o_stream;
@@ -237,14 +240,18 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
       }
 
       pkt.pts =
-          av_rescale_q_rnd(pkt.pts, i_stream->time_base, o_stream->time_base,
+          pts_offset + av_rescale_q_rnd(pkt.pts, i_stream->time_base, o_stream->time_base,
                            AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
       pkt.dts =
-          av_rescale_q_rnd(pkt.dts, i_stream->time_base, o_stream->time_base,
+          dts_offset + av_rescale_q_rnd(pkt.dts, i_stream->time_base, o_stream->time_base,
                            AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
       pkt.duration =
           av_rescale_q(pkt.duration, i_stream->time_base, o_stream->time_base);
       pkt.pos = -1;
+
+      pts = pkt.pts;
+      dts = pkt.dts;
+      duration = pkt.duration;
 
       ret = av_interleaved_write_frame(o_fmt_ctx, &pkt);
       if (ret < 0) {
@@ -253,6 +260,12 @@ o_buffer_data *concat(uint8_t *buffer_list[], size_t size_list[],
 
       av_packet_unref(&pkt);
     }
+
+    pts_offset = pts + duration;
+    dts_offset = dts + duration;
+
+    printf("%d   %d\n", pts_offset, dts_offset);
+
     av_packet_unref(&pkt);
 
     avformat_close_input(&fmt_ctx);

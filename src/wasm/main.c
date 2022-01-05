@@ -12,8 +12,6 @@ int main(int argc, char *argv[]) {
     uint8_t *buffer = NULL;
     size_t size = 0;
 
-
-
     ret = av_file_map(filename, &buffer, &size, 0, NULL);
 
     buffer_list[0] = buffer;
@@ -25,5 +23,6 @@ int main(int argc, char *argv[]) {
     o_buffer_data *bd = concat(buffer_list, size_list, 2);
     dump_buffer(bd->ptr, bd->size);
     printf("%d   %d\n", bd->size, size);
+
     return ret;
 }
